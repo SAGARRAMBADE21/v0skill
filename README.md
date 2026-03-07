@@ -6,13 +6,12 @@ Complete programmatic control over the **entire Vercel v0 platform** from OpenCl
 
 | Category | Commands | What It Controls |
 |----------|:--------:|------------------|
-| **AI Code Generation** | 3 | Text prompts, image-to-code, streaming |
 | **Project Management** | 6 | Create, list, get, update, delete, lookup by chat |
 | **Chat Management** | 9 | Create, stream, send, fork, favorite, delete, privacy, model select |
 | **Deployments** | 3 | Deploy, status check, view logs |
 | **Vercel Integration** | 2 | Link GitHub/Vercel projects, list integrations |
 | **User & Account** | 4 | Profile, billing/plan, permissions, rate limits |
-| **Total** | **27** | |
+| **Total** | **24** | |
 
 ## Setup
 
@@ -58,18 +57,6 @@ Then: `/refresh skills`
 
 ## Usage
 
-### AI Code Generation
-```bash
-# Generate from text prompt
-python scripts/v0_quick.py "Create a dashboard with sidebar"
-
-# Generate from image/screenshot
-python scripts/v0_quick.py "Recreate this UI" --image "https://example.com/mockup.png"
-
-# Stream output for complex tasks
-python scripts/v0_quick.py "Full e-commerce platform" --stream --model v0-1.5-lg
-```
-
 ### Project Management
 ```bash
 node scripts/v0_platform.mjs list-projects
@@ -80,9 +67,9 @@ node scripts/v0_platform.mjs update-project <projectId> "New Name"
 node scripts/v0_platform.mjs delete-project <projectId>
 ```
 
-### Chat Management
+### Chat Management (AI Code Generation)
 ```bash
-# Create with options
+# Create with options (generates code + preview URL)
 node scripts/v0_platform.mjs create-chat "Build a todo app" --model v0-1.5-md --privacy private
 
 # Create with image attachment
@@ -131,19 +118,14 @@ node scripts/v0_platform.mjs rate-limits       # API usage
 ## File Structure
 ```
 v0-vercel/
-├── SKILL.md                          # Full skill definition (27 tools)
+├── SKILL.md                          # Full skill definition (24 tools)
 ├── README.md                         # This file
 └── scripts/
-    ├── v0_quick.py                   # Model API — cross-platform Python
-    ├── v0_generate.sh                # Model API — bash (non-streaming)
-    ├── v0_generate_with_image.sh     # Model API — bash (multimodal)
-    ├── v0_stream.sh                  # Model API — bash (streaming)
     └── v0_platform.mjs              # Platform API — full control CLI
 ```
 
 ## Links
 - [v0 Docs](https://v0.app/docs)
-- [v0 Model API](https://v0.app/docs/api/model)
 - [v0 Platform API](https://v0.app/docs/api/platform/overview)
 - [v0-sdk GitHub](https://github.com/vercel/v0-sdk)
 - [v0 API Keys](https://v0.dev/chat/settings/keys)
