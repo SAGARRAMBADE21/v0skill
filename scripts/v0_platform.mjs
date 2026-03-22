@@ -5,11 +5,7 @@ if (nodeVersion < 18) {
     process.exit(1);
 }
 
-const BASE_URL = 'https://api.v0.dev/v1';
-const DEFAULT_TIMEOUT_MS = 30_000;
-const GENERATION_TIMEOUT_MS = 120_000;
-const MAX_RETRIES = 3;
-const RETRY_BACKOFF_MS = 1000;
+const BASE_URL = process.env.V0_BASE_URL || 'https://api.v0.dev/v1';
 const VERBOSE = process.argv.includes('--verbose');
 
 function getApiKey() {
@@ -30,11 +26,16 @@ function parseFlags(args) {
     for (let i = 0; i < args.length; i++) {
         if (args[i].startsWith('--')) {
             const key = args[i].slice(2);
-            if (key === 'confirm' || key === 'verbose' || key === 'force') {
+            if (key === 'confirm' || key === 'verbose' || key === 'force' || key === 'json') {
                 flags[key] = true;
             } else {
-                flags[key] = args[i + 1] || true;
-                i++;
+                const next = args[i + 1];
+                if (next !== undefined && !next.startsWith('--')) {
+                    flags[key] = next;
+                    i++;
+                } else {
+                    flags[key] = true;
+                }
             }
         } else {
             positional.push(args[i]);
@@ -43,66 +44,50 @@ function parseFlags(args) {
     return { flags, positional };
 }
 
+const JSON_OUTPUT = process.argv.includes('--json');
 function log(...args) { if (VERBOSE) console.log('[DEBUG]', ...args); }
-function printJSON(label, data) { console.log(`\n--- ${label} ---\n${JSON.stringify(data, null, 2)}`); }
-async function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+function printJSON(label, data) { if (VERBOSE || JSON_OUTPUT) console.log(`\n--- ${label} ---\n${JSON.stringify(data, null, 2)}`); }
 
-async function apiRequest(method, path, body = null, timeoutMs = DEFAULT_TIMEOUT_MS) {
+async function apiRequest(method, path, body = null) {
     const apiKey = getApiKey();
     const url = `${BASE_URL}${path}`;
+    const options = {
+        method,
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    };
+    if (body) options.body = JSON.stringify(body);
+    log(`${method} ${url}`);
 
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), timeoutMs);
-        const options = {
-            method,
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            signal: controller.signal,
-        };
-        if (body) options.body = JSON.stringify(body);
-        log(`${method} ${url} (attempt ${attempt}/${MAX_RETRIES})`);
-
+    try {
+        const response = await fetch(url, options);
+        log(`Response: ${response.status} ${response.statusText}`);
+        if (response.status === 204) return null;
+        let data;
         try {
-            const response = await fetch(url, options);
-            clearTimeout(timeout);
-            log(`Response: ${response.status} ${response.statusText}`);
-            if (response.status === 204) return null;
-            const data = await response.json();
-
-            if (!response.ok) {
-                if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
-                    const waitMs = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
-                    console.error(`${response.status} error, retrying in ${waitMs / 1000}s... (${attempt}/${MAX_RETRIES})`);
-                    await sleep(waitMs);
-                    continue;
-                }
-                console.error(`Error: API returned ${response.status}`);
-                if (data.error) {
-                    console.error(`Code: ${data.error.code}`);
-                    console.error(`Type: ${data.error.type}`);
-                    console.error(`Message: ${data.error.userMessage || data.error.message}`);
-                } else {
-                    console.error(JSON.stringify(data, null, 2));
-                }
-                process.exit(1);
-            }
-            return data;
-        } catch (err) {
-            clearTimeout(timeout);
-            if (err.name === 'AbortError') {
-                if (attempt < MAX_RETRIES) { console.error(`Request timed out, retrying... (${attempt}/${MAX_RETRIES})`); continue; }
-                console.error(`Error: Request timed out after ${MAX_RETRIES} attempts.`);
-                process.exit(1);
-            }
-            if (attempt < MAX_RETRIES) {
-                const waitMs = RETRY_BACKOFF_MS * Math.pow(2, attempt - 1);
-                console.error(`Network error: ${err.message}, retrying in ${waitMs / 1000}s...`);
-                await sleep(waitMs);
-                continue;
-            }
-            console.error(`Error: Failed after ${MAX_RETRIES} attempts: ${err.message}`);
+            data = await response.json();
+        } catch {
+            console.error(`Error: API returned non-JSON response (status ${response.status}).`);
             process.exit(1);
         }
+        if (!response.ok) {
+            console.error(`Error: API returned ${response.status}`);
+            if (data && data.error) {
+                console.error(`Code: ${data.error.code}`);
+                console.error(`Type: ${data.error.type}`);
+                console.error(`Message: ${data.error.userMessage || data.error.message}`);
+            } else if (data) {
+                console.error(JSON.stringify(data, null, 2));
+            }
+            const exitCode = response.status === 401 ? 2
+                : response.status === 404 ? 3
+                : response.status === 429 ? 4
+                : 1;
+            process.exit(exitCode);
+        }
+        return data;
+    } catch (err) {
+        console.error(`Error: ${err.message}`);
+        process.exit(1);
     }
 }
 
@@ -110,37 +95,42 @@ async function apiStream(path, body) {
     const apiKey = getApiKey();
     const url = `${BASE_URL}${path}`;
     log(`STREAM POST ${url}`);
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-    });
-    if (!response.ok) {
-        const errText = await response.text();
-        console.error(`Error: Stream API returned ${response.status}: ${errText}`);
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+            const errText = await response.text();
+            console.error(`Error: Stream API returned ${response.status}: ${errText}`);
+            process.exit(1);
+        }
+        return response;
+    } catch (err) {
+        console.error(`Error: ${err.message}`);
         process.exit(1);
     }
-    return response;
 }
 
 async function listProjects() {
     const data = await apiRequest('GET', '/projects');
-    if (Array.isArray(data)) {
-        console.log(`Found ${data.length} project(s):\n`);
-        data.forEach(p => {
-            console.log(`  ${p.name || 'Untitled'}`);
-            console.log(`    ID: ${p.id}`);
-            if (p.url) console.log(`    URL: ${p.url}`);
-            console.log('');
-        });
-    }
+    const projects = Array.isArray(data) ? data : (data.projects || []);
+    console.log(`Found ${projects.length} project(s):\n`);
+    projects.forEach(p => {
+        console.log(`  ${p.name || 'Untitled'}`);
+        console.log(`    ID: ${p.id}`);
+        if (p.url) console.log(`    URL: ${p.url}`);
+        console.log('');
+    });
     printJSON('Raw', data);
 }
 
 async function createProject(name, description) {
     const body = { name };
     if (description) body.description = description;
-    const data = await apiRequest('POST', '/projects', body, GENERATION_TIMEOUT_MS);
+    const data = await apiRequest('POST', '/projects', body);
     console.log(`Project created: ${data.name} (ID: ${data.id})`);
     if (data.url) console.log(`URL: ${data.url}`);
     printJSON('Full Response', data);
@@ -156,6 +146,11 @@ async function getProject(projectId) {
 async function getProjectByChat(chatId) {
     const data = await apiRequest('GET', `/chats/${encodeURIComponent(chatId)}/project`);
     console.log(`Project for chat ${chatId}:`);
+    if (data) {
+        console.log(`  Name: ${data.name || 'Untitled'}`);
+        console.log(`  ID: ${data.id}`);
+        if (data.url) console.log(`  URL: ${data.url}`);
+    }
     printJSON('Project', data);
 }
 
@@ -184,7 +179,7 @@ async function createChat(message, flags = {}) {
     if (flags.model) body.modelConfiguration = { modelId: flags.model };
     if (flags.image) body.attachments = [{ url: flags.image }];
 
-    const data = await apiRequest('POST', '/chats', body, GENERATION_TIMEOUT_MS);
+    const data = await apiRequest('POST', '/chats', body);
     console.log(`Chat created (ID: ${data.id})`);
     if (data.webUrl) console.log(`Web URL: ${data.webUrl}`);
     if (data.latestVersion?.demoUrl) console.log(`Preview: ${data.latestVersion.demoUrl}`);
@@ -222,7 +217,7 @@ async function createChatStream(message, flags = {}) {
                 const chunk = JSON.parse(dataStr);
                 if (chunk.event === 'message' && chunk.data) process.stdout.write(chunk.data);
                 else if (chunk.content) process.stdout.write(chunk.content);
-            } catch { }
+            } catch (parseErr) { log(`SSE parse error: ${parseErr.message}`); }
         }
     }
     console.log('\nStream complete.');
@@ -249,7 +244,7 @@ async function listChats() {
 }
 
 async function sendMessage(chatId, message) {
-    const data = await apiRequest('POST', `/chats/${encodeURIComponent(chatId)}/messages`, { message }, GENERATION_TIMEOUT_MS);
+    const data = await apiRequest('POST', `/chats/${encodeURIComponent(chatId)}/messages`, { message });
     console.log(`Message sent to chat ${chatId}`);
     if (data.content) { console.log(`\n--- AI Response ---\n${data.content}`); }
     if (data.files && data.files.length > 0) {
@@ -261,10 +256,18 @@ async function sendMessage(chatId, message) {
 
 async function getFiles(chatId) {
     const data = await apiRequest('GET', `/chats/${encodeURIComponent(chatId)}/messages`);
+    const seenNames = new Set();
     let allFiles = [];
     const messages = Array.isArray(data) ? data : (data.messages || []);
-    messages.forEach(msg => { if (msg.files) allFiles = allFiles.concat(msg.files); });
-    if (data.files) allFiles = allFiles.concat(data.files);
+    const topFiles = Array.isArray(data) ? [] : (data.files || []);
+    for (const msg of messages) {
+        if (msg.files) for (const f of msg.files) {
+            if (!seenNames.has(f.name)) { seenNames.add(f.name); allFiles.push(f); }
+        }
+    }
+    for (const f of topFiles) {
+        if (!seenNames.has(f.name)) { seenNames.add(f.name); allFiles.push(f); }
+    }
 
     if (allFiles.length === 0) {
         console.log('No files found in this chat.');
@@ -272,7 +275,7 @@ async function getFiles(chatId) {
         console.log(`Found ${allFiles.length} file(s) in chat ${chatId}:\n`);
         allFiles.forEach(file => {
             console.log(`--- ${file.name} ---`);
-            console.log(file.content);
+            if (file.content !== undefined) console.log(file.content);
             console.log('');
         });
     }
@@ -308,7 +311,7 @@ async function deleteChat(chatId, confirmed) {
 }
 
 async function deploy(projectId, chatId, versionId) {
-    const data = await apiRequest('POST', '/deployments', { projectId, chatId, versionId }, GENERATION_TIMEOUT_MS);
+    const data = await apiRequest('POST', '/deployments', { projectId, chatId, versionId });
     console.log(`Deployed (ID: ${data.id})`);
     if (data.url) console.log(`URL: ${data.url}`);
     printJSON('Deployment', data);
@@ -343,7 +346,13 @@ async function vercelCreate(vercelProjectId, name) {
 
 async function vercelList() {
     const data = await apiRequest('GET', '/integrations/vercel/projects');
-    console.log(`Vercel integration projects:`);
+    const projects = Array.isArray(data) ? data : (data.projects || []);
+    console.log(`Found ${projects.length} Vercel integration project(s):\n`);
+    projects.forEach(p => {
+        console.log(`  ${p.name || p.id}`);
+        if (p.url) console.log(`    URL: ${p.url}`);
+        console.log('');
+    });
     printJSON('Projects', data);
 }
 
@@ -358,23 +367,79 @@ async function userInfo() {
 async function userPlan() {
     const data = await apiRequest('GET', '/user/plan');
     console.log(`Plan & Billing:`);
+    if (data) {
+        if (data.plan) console.log(`  Plan: ${data.plan}`);
+        if (data.credits !== undefined) console.log(`  Credits: ${data.credits}`);
+        if (data.renewsAt) console.log(`  Renews: ${data.renewsAt}`);
+    }
     printJSON('Plan', data);
 }
 
 async function userScopes() {
     const data = await apiRequest('GET', '/user/scopes');
+    const scopes = Array.isArray(data) ? data : (data.scopes || []);
     console.log(`User Scopes/Permissions:`);
+    if (scopes.length > 0) scopes.forEach(s => console.log(`  - ${s}`));
+    else console.log('  (none)');
     printJSON('Scopes', data);
 }
 
 async function rateLimits() {
     const data = await apiRequest('GET', '/rate-limits');
     console.log(`Rate Limits:`);
+    if (data) {
+        if (data.limit !== undefined) console.log(`  Limit: ${data.limit}`);
+        if (data.remaining !== undefined) console.log(`  Remaining: ${data.remaining}`);
+        if (data.reset) console.log(`  Resets: ${data.reset}`);
+    }
     printJSON('Limits', data);
 }
 
+async function listEnvVars(projectId, flags = {}) {
+    const query = flags.decrypted ? '?decrypted=true' : '';
+    const data = await apiRequest('GET', `/projects/${encodeURIComponent(projectId)}/env-vars${query}`);
+    const vars = Array.isArray(data) ? data : (data.environmentVariables || []);
+    console.log(`Found ${vars.length} environment variable(s) for project ${projectId}:\n`);
+    vars.forEach(v => {
+        console.log(`  ${v.key}: ${v.value || '(encrypted)'}`);
+        if (v.id) console.log(`    ID: ${v.id}`);
+    });
+    printJSON('Raw', data);
+}
+
+async function createEnvVar(projectId, key, value, flags = {}) {
+    const body = { environmentVariables: [{ key, value }] };
+    if (flags.upsert) body.upsert = true;
+    const data = await apiRequest('POST', `/projects/${encodeURIComponent(projectId)}/env-vars`, body);
+    console.log(`Environment variable "${key}" created for project ${projectId}.`);
+    printJSON('Full Response', data);
+}
+
+async function updateEnvVar(projectId, envVarId, value) {
+    const body = { environmentVariables: [{ id: envVarId, value }] };
+    const data = await apiRequest('PATCH', `/projects/${encodeURIComponent(projectId)}/env-vars`, body);
+    console.log(`Environment variable ${envVarId} updated.`);
+    printJSON('Full Response', data);
+}
+
+async function deleteEnvVar(projectId, envVarId, confirmed) {
+    if (!confirmed) {
+        console.error('Error: Destructive operation. Add --confirm flag to delete.');
+        console.error(`Usage: node v0_platform.mjs delete-env-var "${projectId}" "${envVarId}" --confirm`);
+        process.exit(1);
+    }
+    await apiRequest('DELETE', `/projects/${encodeURIComponent(projectId)}/env-vars`, { environmentVariableIds: [envVarId] });
+    console.log(`Environment variable ${envVarId} deleted.`);
+}
+
+const VERSION = '1.0.0';
 const [, , command, ...rawArgs] = process.argv;
 const { flags, positional } = parseFlags(rawArgs);
+
+if (command === '--version' || command === '-v') {
+    console.log(`v0-cli v${VERSION}`);
+    process.exit(0);
+}
 
 switch (command) {
     case 'list-projects': await listProjects(); break;
@@ -438,6 +503,18 @@ switch (command) {
     case 'user-plan': await userPlan(); break;
     case 'user-scopes': await userScopes(); break;
     case 'rate-limits': await rateLimits(); break;
+    case 'list-env-vars':
+        if (!positional[0]) { console.error('Usage: list-env-vars <projectId> [--decrypted]'); process.exit(1); }
+        await listEnvVars(positional[0], flags); break;
+    case 'create-env-var':
+        if (!positional[0] || !positional[1] || !positional[2]) { console.error('Usage: create-env-var <projectId> <key> <value> [--upsert]'); process.exit(1); }
+        await createEnvVar(positional[0], positional[1], positional[2], flags); break;
+    case 'update-env-var':
+        if (!positional[0] || !positional[1] || !positional[2]) { console.error('Usage: update-env-var <projectId> <envVarId> <value>'); process.exit(1); }
+        await updateEnvVar(positional[0], positional[1], positional[2]); break;
+    case 'delete-env-var':
+        if (!positional[0] || !positional[1]) { console.error('Usage: delete-env-var <projectId> <envVarId> --confirm'); process.exit(1); }
+        await deleteEnvVar(positional[0], positional[1], flags.confirm); break;
     default:
         console.log(`v0 Platform API CLI v1.0
 
@@ -478,12 +555,22 @@ USER & ACCOUNT
   user-scopes                                View permissions
   rate-limits                                Check rate limits
 
+ENVIRONMENT VARIABLES
+  list-env-vars <projectId> [--decrypted]          List project env vars
+  create-env-var <projectId> <key> <value>         Create an env var
+    Flags: --upsert  (overwrite if key exists)
+  update-env-var <projectId> <envVarId> <value>    Update an env var value
+  delete-env-var <projectId> <envVarId> --confirm  Delete an env var
+
 OPTIONS
-  --verbose         Show request/response debug info
+  --verbose         Show debug info and full JSON responses
+  --json            Show full JSON responses (without debug info)
   --confirm         Required for destructive operations
+  --version, -v     Show version
 
 ENVIRONMENT
   V0_API_KEY        Your v0 API key (required)
+  V0_BASE_URL       Override API base URL (optional)
   Get key at:       https://v0.dev/chat/settings/keys`);
         break;
 }

@@ -13,8 +13,8 @@ metadata: { "openclaw": { "requires": { "env": ["V0_API_KEY"] }, "primaryEnv": "
 This skill provides **complete programmatic control** over the entire Vercel v0
 platform from OpenClaw. It covers:
 
-1. **v0 Platform API** — Full project lifecycle via v0-sdk
-2. **Vercel Integration** — GitHub, deployments, custom domains
+1. **v0 Platform API** — Full project lifecycle via the v0 REST API
+2. **Vercel Integration** — Link Vercel projects to v0, manage deployments
 3. **User & Team Management** — Billing, plans, rate limits
 
 ---
@@ -29,9 +29,8 @@ Use this skill when the user wants to:
 - **Retrieve generated files** from chat sessions
 - **Deploy apps** to Vercel with one command
 - **Monitor deployments** and view deployment logs
-- **Connect GitHub repos** to v0 projects (Vercel integration)
+- **Link Vercel projects** to v0 projects via Vercel integration
 - **Check billing, plan, and rate limits**
-- **Use templates** to bootstrap new projects
 - **Manage chat privacy** (private, team, public)
 - **Stream AI responses** in real-time
 - **Attach images/screenshots** for multimodal code generation
@@ -66,7 +65,13 @@ node {baseDir}/scripts/v0_platform.mjs get-project "<PROJECT_ID>"
 node {baseDir}/scripts/v0_platform.mjs get-project-by-chat "<CHAT_ID>"
 ```
 
-#### 1.5 Delete a Project
+#### 1.5 Update / Rename a Project
+
+```bash
+node {baseDir}/scripts/v0_platform.mjs update-project "<PROJECT_ID>" "<NEW_NAME>"
+```
+
+#### 1.6 Delete a Project
 
 ```bash
 node {baseDir}/scripts/v0_platform.mjs delete-project "<PROJECT_ID>" --confirm
@@ -179,31 +184,73 @@ node {baseDir}/scripts/v0_platform.mjs vercel-list
 
 ---
 
-### Category 5: User & Account Management
+### Category 5: Environment Variables
 
-#### 5.1 Get User Info
+#### 5.1 List Environment Variables
+
+```bash
+node {baseDir}/scripts/v0_platform.mjs list-env-vars "<PROJECT_ID>" [--decrypted]
+```
+
+Use `--decrypted` to return plain-text values instead of encrypted ones.
+
+#### 5.2 Create an Environment Variable
+
+```bash
+node {baseDir}/scripts/v0_platform.mjs create-env-var "<PROJECT_ID>" "<KEY>" "<VALUE>" [--upsert]
+```
+
+Use `--upsert` to overwrite if the key already exists (otherwise fails on duplicate).
+
+#### 5.3 Update an Environment Variable
+
+```bash
+node {baseDir}/scripts/v0_platform.mjs update-env-var "<PROJECT_ID>" "<ENV_VAR_ID>" "<NEW_VALUE>"
+```
+
+Only the value can be updated (not the key).
+
+#### 5.4 Delete an Environment Variable
+
+```bash
+node {baseDir}/scripts/v0_platform.mjs delete-env-var "<PROJECT_ID>" "<ENV_VAR_ID>" --confirm
+```
+
+---
+
+### Category 6: User & Account Management
+
+#### 6.1 Get User Info
 
 ```bash
 node {baseDir}/scripts/v0_platform.mjs user-info
 ```
 
-#### 5.2 Get Current Plan & Billing
+#### 6.2 Get Current Plan & Billing
 
 ```bash
 node {baseDir}/scripts/v0_platform.mjs user-plan
 ```
 
-#### 5.3 Get User Scopes / Permissions
+#### 6.3 Get User Scopes / Permissions
 
 ```bash
 node {baseDir}/scripts/v0_platform.mjs user-scopes
 ```
 
-#### 5.4 Check Rate Limits
+#### 6.4 Check Rate Limits
 
 ```bash
 node {baseDir}/scripts/v0_platform.mjs rate-limits
 ```
+
+---
+
+## Critical Rules
+
+- **Call `create-chat` exactly ONCE per user request.** Never make multiple `create-chat` calls for a single prompt, even if the prompt is vague or ambiguous.
+- If you are unsure what the user wants, ask for clarification **before** calling any command.
+- Do not retry `create-chat` with rephrased or alternate prompts — one call, one chat.
 
 ---
 
@@ -241,6 +288,19 @@ node {baseDir}/scripts/v0_platform.mjs rate-limits
 - Add features: "authentication, database CRUD, form validation"
 - Reference patterns: "dashboard, landing page, e-commerce"
 - Attach images: Use --image for screenshot-to-code
+- Models available: `claude-opus-4-5` (included at no extra cost), default v0 model
+
+---
+
+## MCP Server
+
+v0 now has an official MCP (Model Context Protocol) server at `https://mcp.v0.dev`. It allows AI tools and IDEs to access v0 capabilities directly without using this CLI.
+
+To use it, configure your MCP client with:
+- **Endpoint:** `https://mcp.v0.dev`
+- **Auth:** Bearer token using your `V0_API_KEY`
+
+This skill uses the REST API directly — the MCP server is an alternative integration path for tools that support MCP natively.
 
 ---
 
@@ -250,7 +310,7 @@ node {baseDir}/scripts/v0_platform.mjs rate-limits
 - Parse JSON error objects and present the `userMessage` field
 - Common errors:
   - `401 Unauthorized` — Invalid or missing API key
-  - `429 Too Many Requests` — Rate limited, wait and retry
+  - `429 Too Many Requests` — Rate limited, inform the user and exit
   - `project_not_found` — Invalid project ID
   - `chat_not_found` — Invalid chat ID
   - `insufficient_credits` — User needs to purchase more credits
@@ -282,6 +342,9 @@ Set your v0 API key in OpenClaw config:
 ```
 
 Or set as environment variable: `export V0_API_KEY=your_api_key_here`
+
+Optional overrides:
+- `V0_BASE_URL` — Override the API base URL (default: `https://api.v0.dev/v1`)
 
 Get your API key from: https://v0.dev/chat/settings/keys
 Requires a **Premium** ($20/mo) or **Team** ($30/user/mo) plan.

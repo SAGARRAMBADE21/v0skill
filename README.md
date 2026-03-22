@@ -64,7 +64,7 @@ node scripts/v0_platform.mjs create-project "My App" "Description here"
 node scripts/v0_platform.mjs get-project <projectId>
 node scripts/v0_platform.mjs get-project-by-chat <chatId>
 node scripts/v0_platform.mjs update-project <projectId> "New Name"
-node scripts/v0_platform.mjs delete-project <projectId>
+node scripts/v0_platform.mjs delete-project <projectId> --confirm
 ```
 
 ### Chat Management (AI Code Generation)
@@ -89,7 +89,7 @@ node scripts/v0_platform.mjs list-chats
 node scripts/v0_platform.mjs get-chat <chatId>
 node scripts/v0_platform.mjs fork-chat <chatId>
 node scripts/v0_platform.mjs favorite-chat <chatId>
-node scripts/v0_platform.mjs delete-chat <chatId>
+node scripts/v0_platform.mjs delete-chat <chatId> --confirm
 ```
 
 ### Deployments
