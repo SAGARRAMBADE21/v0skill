@@ -116,7 +116,7 @@ async function apiStream(path, body) {
 
 async function listProjects() {
     const data = await apiRequest('GET', '/projects');
-    const projects = Array.isArray(data) ? data : (data.projects || []);
+    const projects = Array.isArray(data) ? data : (data.data || data.projects || []);
     console.log(`Found ${projects.length} project(s):\n`);
     projects.forEach(p => {
         console.log(`  ${p.name || 'Untitled'}`);
@@ -232,7 +232,7 @@ async function getChat(chatId) {
 
 async function listChats() {
     const data = await apiRequest('GET', '/chats');
-    const chats = Array.isArray(data) ? data : (data.chats || []);
+    const chats = Array.isArray(data) ? data : (data.data || data.chats || []);
     console.log(`Found ${chats.length} chat(s):\n`);
     chats.forEach(c => {
         console.log(`  ${c.title || c.id}`);
